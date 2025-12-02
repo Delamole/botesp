@@ -1,23 +1,32 @@
 # main.py
 import os
-from aiogram import Bot, Dispatcher, executor, types
-from aiogram.types import ContentType
+import asyncio
+from aiogram import Bot, Dispatcher
+from aiogram.types import ContentType, Update
+from aiogram.utils.executor import start_webhook
 from supabase import create_client, Client
 import httpx
+from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 
-# Загружаем env.txt (не .env!)
 load_dotenv("env.txt")
 
+# Конфигурация
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+# Telegram Webhook
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_URL = f"https://espbot.onrender.com{WEBHOOK_PATH}"  # ← замените на ваш URL после деплоя
+
+# Инициализация
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+app = FastAPI()
 
 SYSTEM_PROMPT = (
     "Eres un profesor amable y paciente de español como lengua extranjera. "
@@ -30,93 +39,80 @@ SYSTEM_PROMPT = (
 
 async def transcribe_with_deepgram(ogg_path: str) -> str:
     async with httpx.AsyncClient() as client:
-        with open(ogg_path, "rb") as audio_file:
-            response = await client.post(
+        with open(ogg_path, "rb") as f:
+            resp = await client.post(
                 "https://api.deepgram.com/v1/listen?model=nova-2&language=es&smart_format=true",
-                headers={
-                    "Authorization": f"Token {DEEPGRAM_API_KEY}",
-                    "Content-Type": "audio/ogg"
-                },
-                content=audio_file.read()
+                headers={"Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/ogg"},
+                content=f.read()
             )
-    if response.status_code == 200:
-        data = response.json()
-        return data["results"]["channels"][0]["alternatives"][0]["transcript"].strip()
-    return ""
+    return resp.json()["results"]["channels"][0]["alternatives"][0]["transcript"].strip() if resp.status_code == 200 else ""
 
 async def get_chat_history(user_id: int):
     try:
-        response = supabase.table("messages").select("*") \
-            .eq("user_id", user_id) \
-            .order("created_at", desc=False) \
-            .limit(6) \
-            .execute()
-        return [{"role": r["role"], "content": r["content"]} for r in response.data]
-    except Exception as e:
-        print("Ошибка истории:", e)
-        return []
+        r = supabase.table("messages").select("*").eq("user_id", user_id).order("created_at", desc=False).limit(6).execute()
+        return [{"role": m["role"], "content": m["content"]} for m in r.data]
+    except: return []
 
 async def save_message(user_id: int, role: str, content: str):
     try:
-        supabase.table("messages").insert({
-            "user_id": user_id,
-            "role": role,
-            "content": content
-        }).execute()
-    except Exception as e:
-        print("Ошибка сохранения:", e)
+        supabase.table("messages").insert({"user_id": user_id, "role": role, "content": content}).execute()
+    except: pass
 
-async def get_llm_response(user_id: int, user_text: str) -> str:
+async def get_llm_response(user_id: int, text: str) -> str:
     history = await get_chat_history(user_id)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": user_text})
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history + [{"role": "user", "content": text}]
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(
             "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "HTTP-Referer": "https://your-bot-site.com",
-                "X-Title": "Spanish Tutor Bot"
-            },
-            json={
-                "model": "mistralai/mistral-7b-instruct:free",
-                "messages": messages,
-                "temperature": 0.7
-            }
+            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "HTTP-Referer": "https://espbot.onrender.com", "X-Title": "Spanish Bot"},
+            json={"model": "mistralai/mistral-7b-instruct:free", "messages": messages}
         )
     try:
-        answer = response.json()["choices"][0]["message"]["content"].strip()
-    except Exception:
-        return "Lo siento, tuve un problema técnico. ¿Podrías repetirlo?"
-
-    await save_message(user_id, "user", user_text)
-    await save_message(user_id, "assistant", answer)
-    return answer
+        ans = r.json()["choices"][0]["message"]["content"].strip()
+    except:
+        ans = "Lo siento, tuve un problema técnico."
+    await save_message(user_id, "user", text)
+    await save_message(user_id, "assistant", ans)
+    return ans
 
 @dp.message_handler(content_types=ContentType.VOICE)
-async def handle_voice(message: types.Message):
+async def handle_voice(message):
     voice = await message.voice.get_file()
-    file_path = f"/tmp/voice_{message.from_user.id}.ogg"
-    await bot.download_file(voice.file_path, file_path)
-
-    try:
-        user_text = await transcribe_with_deepgram(file_path)
-        if not user_text:
-            await message.reply("No entendí tu mensaje. ¿Puedes repetirlo?")
-            return
-        response_text = await get_llm_response(message.from_user.id, user_text)
-        await message.reply(response_text)
-    except Exception as e:
-        await message.reply("Hubo un error al procesar tu voz.")
-        print(f"Error: {e}")
+    path = f"/tmp/voice_{message.from_user.id}.ogg"
+    await bot.download_file(voice.file_path, path)
+    text = await transcribe_with_deepgram(path)
+    if not text:
+        await message.reply("No entendí tu mensaje.")
+        return
+    resp = await get_llm_response(message.from_user.id, text)
+    await message.reply(resp)
 
 @dp.message_handler(content_types=ContentType.TEXT)
-async def handle_text(message: types.Message):
-    response = await get_llm_response(message.from_user.id, message.text)
-    await message.reply(response)
+async def handle_text(message):
+    resp = await get_llm_response(message.from_user.id, message.text)
+    await message.reply(resp)
+
+@app.on_event("startup")
+async def on_startup():
+    webhook_info = await bot.get_webhook_info()
+    if webhook_info.url != WEBHOOK_URL:
+        await bot.set_webhook(WEBHOOK_URL)
+
+@app.post(WEBHOOK_PATH)
+async def webhook(request: Request):
+    update = Update(**await request.json())
+    await dp.process_update(update)
+
+@app.get("/")
+async def health():
+    return {"status": "ok"}
 
 if __name__ == "__main__":
-    print("🇪🇸 Spanish Tutor Bot (con voz) iniciado...")
-    executor.start_polling(dp, skip_updates=True)
+    # Локальный запуск (не используется на Render)
+    start_webhook(
+        dispatcher=dp,
+        webhook_path=WEBHOOK_PATH,
+        on_startup=on_startup,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 10000)),
+    )
