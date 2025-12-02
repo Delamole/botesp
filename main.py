@@ -20,7 +20,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Telegram Webhook
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-WEBHOOK_URL = f"https://botesp-1.onrender.com}"  # ← замените на ваш URL после деплоя
+WEBHOOK_URL = f"https://espbot.onrender.com/webhook/8492979920:AAEcKGTwX8mF7qWbyoKfYTWhz_YH1-CxC4k}"  # ← замените на ваш URL после деплоя
 
 # Инициализация
 bot = Bot(token=BOT_TOKEN)
