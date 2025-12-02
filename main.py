@@ -15,6 +15,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Инициализация
 bot = Bot(token=BOT_TOKEN)
+Bot.set_current(bot)  # ← ЭТО ОБЯЗАТЕЛЬНО
 dp = Dispatcher(bot)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = FastAPI()
@@ -151,3 +152,18 @@ async def telegram_webhook(request: Request):
 @app.get("/")
 async def health_check():
     return {"status": "ok", "webhook": "active"}
+
+# Проверка ответа
+    if response.status_code != 200:
+        print(f"OpenRouter error: {response.status_code} - {response.text}")
+        return "Lo siento, tuve un problema técnico."
+
+    data = response.json()
+    if "choices" not in data or not data["choices"]:
+        print(f"Invalid OpenRouter response: {data}")
+        return "Lo siento, tuve un problema técnico."
+
+    answer = data["choices"][0]["message"]["content"].strip()
+    await save_message(user_id, "user", user_text)
+    await save_message(user_id, "assistant", answer)
+    return answer
