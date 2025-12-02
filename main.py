@@ -4,11 +4,10 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.types import ContentType
 from supabase import create_client, Client
 import httpx
-
 from dotenv import load_dotenv
-load_dotenv("env.txt")  # ← вот так
 
-load_dotenv()
+# Загружаем env.txt (не .env!)
+load_dotenv("env.txt")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
