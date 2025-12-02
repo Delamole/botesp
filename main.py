@@ -3,30 +3,27 @@ import os
 import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.types import ContentType, Update
-from aiogram.utils.executor import start_webhook
 from supabase import create_client, Client
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from dotenv import load_dotenv
 
 load_dotenv("env.txt")
 
-# Конфигурация
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Telegram Webhook
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-WEBHOOK_URL = f"https://espbot.onrender.com/webhook/8492979920:AAEcKGTwX8mF7qWbyoKfYTWhz_YH1-CxC4k}"  # ← замените на ваш URL после деплоя
-
 # Инициализация
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = FastAPI()
+
+# Вебхук — используем фиксированный путь, а токен проверяем вручную
+WEBHOOK_PATH = "/webhook"  # ← Без токена в URL!
 
 SYSTEM_PROMPT = (
     "Eres un profesor amable y paciente de español como lengua extranjera. "
@@ -94,25 +91,20 @@ async def handle_text(message):
 
 @app.on_event("startup")
 async def on_startup():
-    webhook_info = await bot.get_webhook_info()
-    if webhook_info.url != WEBHOOK_URL:
-        await bot.set_webhook(WEBHOOK_URL)
+    # Устанавливаем вебхук на простой URL
+    webhook_url = f"https://espbot.onrender.com/webhook"
+    await bot.set_webhook(webhook_url)
+    print(f"✅ Webhook установлен: {webhook_url}")
 
-@app.post(WEBHOOK_PATH)
+@app.post("/webhook")
 async def webhook(request: Request):
-    update = Update(**await request.json())
+    # Получаем данные
+    data = await request.json()
+    update = Update(**data)
+    # Обрабатываем
     await dp.process_update(update)
+    return Response(status_code=200)  # Telegram требует 200 OK
 
 @app.get("/")
 async def health():
     return {"status": "ok"}
-
-if __name__ == "__main__":
-    # Локальный запуск (не используется на Render)
-    start_webhook(
-        dispatcher=dp,
-        webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 10000)),
-    )
