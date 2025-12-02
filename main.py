@@ -61,7 +61,7 @@ async def get_llm_response(user_id: int, text: str) -> str:
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(
             "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "HTTP-Referer": "https://espbot.onrender.com", "X-Title": "Spanish Bot"},
+            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "HTTP-Referer": "https://botesp-1.onrender.com", "X-Title": "Spanish Bot"},
             json={"model": "mistralai/mistral-7b-instruct:free", "messages": messages}
         )
     try:
@@ -92,7 +92,7 @@ async def handle_text(message):
 @app.on_event("startup")
 async def on_startup():
     # Устанавливаем вебхук на простой URL
-    webhook_url = f"https://espbot.onrender.com/webhook"
+    webhook_url = f"botesp-1.onrender.com/webhook"
     await bot.set_webhook(webhook_url)
     print(f"✅ Webhook установлен: {webhook_url}")
 
