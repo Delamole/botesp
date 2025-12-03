@@ -156,7 +156,7 @@ async def handle_voice(message):
         response_text = await get_llm_response(message.from_user.id, user_text)
         # Отправляем голос + текст как fallback
         voice_path = f"/tmp/resp_{message.message_id}.ogg"
-        voice_file = await text_to_speech_ogg(response_text, voice_path, lang="es")
+        voice_file = await text_to_speech_ogg(response_text, voice_path)
         if voice_file and os.path.exists(voice_file):
             with open(voice_file, "rb") as f:
                 await message.reply_voice(f)
@@ -172,7 +172,7 @@ async def handle_text(message):
     try:
         response_text = await get_llm_response(message.from_user.id, message.text)
         voice_path = f"/tmp/resp_{message.message_id}.ogg"
-        voice_file = await text_to_speech_ogg(response_text, voice_path, lang="es")
+        voice_file = await text_to_speech_ogg(response_text, voice_path)
         if voice_file and os.path.exists(voice_file):
             with open(voice_file, "rb") as f:
                 await message.reply_voice(f)
