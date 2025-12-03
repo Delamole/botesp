@@ -33,25 +33,27 @@ SYSTEM_PROMPT = (
 
 async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
     try:
-    	  text = text.replace(".", ". ")
+        # Улучшаем интонацию через пробелы после знаков препинания
+        text = text.replace(".", ". ")
         text = text.replace("?", "? ")
         text = text.replace("!", "! ")
         text = text.strip()
+
         temp_wav = output_path.replace(".ogg", ".wav")
         
-        # Используем espeak-ng с улучшенными параметрами для испанского
+        # Генерация речи через espeak-ng
         subprocess.run([
             "espeak-ng",
-            "-v", "es",          # Латиноамериканский испанский
-            "-s", "110",            # Скорость: 120 слов/мин
-            "--pho",                # Улучшает плавность через фонемы
-            "-p", "55",             # Тон: чуть выше среднего
-            "-a", "200",            # Громкость
+            "-v", "es",          # Испанский
+            "-s", "110",         # Скорость
+            "--pho",             # Фонемический режим — плавнее
+            "-p", "55",          # Тон
+            "-a", "200",         # Громкость
             "-w", temp_wav,
             text
         ], check=True, capture_output=True)
 
-        # Конвертация в .ogg (требование Telegram Voice)
+        # Конвертация в .ogg (формат Telegram Voice)
         subprocess.run([
             "ffmpeg", "-y", "-i", temp_wav, "-acodec", "libopus", output_path
         ], check=True, capture_output=True)
@@ -68,7 +70,7 @@ async def transcribe_with_deepgram(ogg_path: str) -> str:
     async with httpx.AsyncClient() as client:
         with open(ogg_path, "rb") as f:
             resp = await client.post(
-                "https://api.deepgram.com/v1/listen?model=nova-2&language=es&smart_format=true",  # ← пробелы удалены
+                "https://api.deepgram.com/v1/listen?model=nova-2&language=es&smart_format=true",
                 headers={
                     "Authorization": f"Token {DEEPGRAM_API_KEY}",
                     "Content-Type": "audio/ogg"
@@ -113,10 +115,10 @@ async def get_llm_response(user_id: int, user_text: str) -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",  # ← пробелы удалены
+                "https://openrouter.ai/api/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "HTTP-Referer": "https://botesp-1.onrender.com",  # ← пробелы удалены
+                    "HTTP-Referer": "https://botesp-1.onrender.com",
                     "X-Title": "Spanish Tutor Bot"
                 },
                 json={
@@ -158,7 +160,6 @@ async def handle_voice(message):
             return
 
         response_text = await get_llm_response(message.from_user.id, user_text)
-        # Отправляем голос + текст как fallback
         voice_path = f"/tmp/resp_{message.message_id}.ogg"
         voice_file = await text_to_speech_ogg(response_text, voice_path)
         if voice_file and os.path.exists(voice_file):
@@ -190,7 +191,7 @@ async def handle_text(message):
 # === Webhooks ===
 @app.on_event("startup")
 async def on_startup():
-    webhook_url = "https://botesp-1.onrender.com/webhook"  # ← без пробелов, с https://
+    webhook_url = "https://botesp-1.onrender.com/webhook"
     await bot.set_webhook(webhook_url)
     print(f"✅ Webhook установлен: {webhook_url}")
 
