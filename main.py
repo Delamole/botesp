@@ -13,6 +13,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")  # ← ДОБАВЬТЕ ЭТО В RENDER
 
 # Инициализация
 bot = Bot(token=BOT_TOKEN)
@@ -21,7 +22,7 @@ dp = Dispatcher(bot)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = FastAPI()
 
-# Системный промпт
+# Системный промпт на испанском
 SYSTEM_PROMPT = (
     "Eres un profesor amable y paciente de español como lengua extranjera. "
     "Corrige errores gramaticales, de vocabulario o pronunciación de forma clara y sencilla. "
@@ -31,41 +32,59 @@ SYSTEM_PROMPT = (
     "Adapta tu lenguaje al nivel principiante."
 )
 
+# === TTS через ElevenLabs ===
 async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
+    """
+    Генерирует .ogg через ElevenLabs (нейросетевой TTS)
+    """
     try:
-        # Улучшаем интонацию через пробелы после знаков препинания
-        text = text.replace(".", ". ")
-        text = text.replace("?", "? ")
-        text = text.replace("!", "! ")
-        text = text.strip()
+        if not ELEVENLABS_API_KEY:
+            print("⚠️ ELEVENLABS_API_KEY not set — skipping TTS")
+            return None
 
-        temp_wav = output_path.replace(".ogg", ".wav")
-        
-        # Генерация речи через espeak-ng
+        # Голос Rachel — поддерживает испанский в мультиязычной модели
+        voice_id = "pNInz6obpgDQGcFXXJ0n"  # Rachel
+        model_id = "eleven_multilingual_v2"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+                headers={
+                    "xi-api-key": ELEVENLABS_API_KEY,
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "text": text,
+                    "model_id": model_id,
+                    "voice_settings": {
+                        "stability": 0.7,
+                        "similarity_boost": 0.8
+                    }
+                }
+            )
+
+            if response.status_code != 200:
+                print(f"❌ ElevenLabs error {response.status_code}: {response.text}")
+                return None
+
+        # Сохраняем .mp3
+        mp3_path = output_path.replace(".ogg", ".mp3")
+        with open(mp3_path, "wb") as f:
+            f.write(response.content)
+
+        # Конвертируем в .ogg (требование Telegram Voice)
         subprocess.run([
-            "espeak-ng",
-            "-v", "es",          # Испанский
-            "-s", "110",         # Скорость
-            "--pho",             # Фонемический режим — плавнее
-            "-p", "55",          # Тон
-            "-a", "200",         # Громкость
-            "-w", temp_wav,
-            text
+            "ffmpeg", "-y", "-i", mp3_path, "-acodec", "libopus", output_path
         ], check=True, capture_output=True)
 
-        # Конвертация в .ogg (формат Telegram Voice)
-        subprocess.run([
-            "ffmpeg", "-y", "-i", temp_wav, "-acodec", "libopus", output_path
-        ], check=True, capture_output=True)
-
-        os.remove(temp_wav)
+        os.remove(mp3_path)
         return output_path
 
     except Exception as e:
-        print(f"TTS (espeak-ng) error: {e}")
+        print(f"TTS (ElevenLabs) error: {e}")
         return None
 
-# === Распознавание речи (голос → текст) ===
+# === Распознавание речи → Deepgram ===
 async def transcribe_with_deepgram(ogg_path: str) -> str:
     async with httpx.AsyncClient() as client:
         with open(ogg_path, "rb") as f:
@@ -82,7 +101,7 @@ async def transcribe_with_deepgram(ogg_path: str) -> str:
         return data["results"]["channels"][0]["alternatives"][0]["transcript"].strip()
     return ""
 
-# === Работа с историей ===
+# === История и ИИ ===
 async def get_chat_history(user_id: int):
     try:
         response = supabase.table("messages").select("*") \
@@ -105,7 +124,6 @@ async def save_message(user_id: int, role: str, content: str):
     except Exception as e:
         print(f"Save error: {e}")
 
-# === Ответ от ИИ ===
 async def get_llm_response(user_id: int, user_text: str) -> str:
     history = await get_chat_history(user_id)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -146,7 +164,22 @@ async def get_llm_response(user_id: int, user_text: str) -> str:
             print(f"❌ OpenRouter exception: {e}")
             return "Lo siento, tuve un problema técnico."
 
-# === Обработчики сообщений ===
+# === Отправка ответа с голосом ===
+async def send_response_with_voice(message, response_text: str):
+    try:
+        voice_path = f"/tmp/resp_{message.message_id}.ogg"
+        voice_file = await text_to_speech_ogg(response_text)
+        if voice_file and os.path.exists(voice_file):
+            with open(voice_file, "rb") as f:
+                await message.reply_voice(f)
+            os.remove(voice_file)
+        else:
+            await message.reply(response_text)
+    except Exception as e:
+        print(f"Send voice error: {e}")
+        await message.reply(response_text)
+
+# === Обработчики ===
 @dp.message_handler(content_types=ContentType.VOICE)
 async def handle_voice(message):
     try:
@@ -160,14 +193,7 @@ async def handle_voice(message):
             return
 
         response_text = await get_llm_response(message.from_user.id, user_text)
-        voice_path = f"/tmp/resp_{message.message_id}.ogg"
-        voice_file = await text_to_speech_ogg(response_text, voice_path)
-        if voice_file and os.path.exists(voice_file):
-            with open(voice_file, "rb") as f:
-                await message.reply_voice(f)
-            os.remove(voice_file)
-        else:
-            await message.reply(response_text)
+        await send_response_with_voice(message, response_text)
     except Exception as e:
         print(f"Voice handler error: {e}")
         await message.reply("Hubo un error al procesar tu voz.")
@@ -176,14 +202,7 @@ async def handle_voice(message):
 async def handle_text(message):
     try:
         response_text = await get_llm_response(message.from_user.id, message.text)
-        voice_path = f"/tmp/resp_{message.message_id}.ogg"
-        voice_file = await text_to_speech_ogg(response_text, voice_path)
-        if voice_file and os.path.exists(voice_file):
-            with open(voice_file, "rb") as f:
-                await message.reply_voice(f)
-            os.remove(voice_file)
-        else:
-            await message.reply(response_text)
+        await send_response_with_voice(message, response_text)
     except Exception as e:
         print(f"Text handler error: {e}")
         await message.reply("Lo siento, algo salió mal.")
@@ -193,7 +212,7 @@ async def handle_text(message):
 async def on_startup():
     webhook_url = "https://botesp-1.onrender.com/webhook"
     await bot.set_webhook(webhook_url)
-    print(f"✅ Webhook установлен: {webhook_url}")
+    print(f"✅ Webhook set: {webhook_url}")
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
