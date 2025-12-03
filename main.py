@@ -1,5 +1,6 @@
 # main.py
 import os
+import subprocess
 from aiogram import Bot, Dispatcher
 from aiogram.types import (
     ContentType, Update, Message, CallbackQuery,
@@ -9,14 +10,14 @@ from supabase import create_client, Client
 import httpx
 from fastapi import FastAPI, Request, Response
 
-# === Глобальное хранилище последних ответов (для MVP) ===
-# В продакшене замените на Redis или Supabase
+# === Глобальное хранилище последних ответов ===
 last_responses = {}
 
 # === Переменные окружения ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")  # ← Обязательно для STT
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
@@ -37,47 +38,54 @@ SYSTEM_PROMPT = (
     "Adapta tu lenguaje al nivel principiante."
 )
 
-# === TTS: Yandex SpeechKit (исправлено) ===
+# === TTS: espeak-ng (локально) ===
 async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
     try:
-        ssml_content = f'<speak><lang xml:lang="es-ES">{text}</lang></speak>'
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize",  # ← пробелы удалены
-                headers={"Authorization": f"Api-Key {YANDEX_API_KEY}"},
-                data={
-                    "ssml": ssml_content,
-                    "folderId": YANDEX_FOLDER_ID,
-                    "voice": "madirus",
-                    "format": "oggopus"
-                }
-            )
-        if response.status_code != 200:
-            print(f"Yandex TTS error: {response.text}")
+        text = text.replace("&", "y").replace("<", "").replace(">", "")
+        wav_path = output_path.replace(".ogg", ".wav")
+
+        result = subprocess.run([
+            "espeak-ng", "-v", "es-la", "-s", "110", "--pho", "-p", "55", "-a", "200",
+            "-w", wav_path, text
+        ], capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"espeak-ng error: {result.stderr}")
             return None
-        with open(output_path, "wb") as f:
-            f.write(response.content)
+
+        ffmpeg_result = subprocess.run([
+            "ffmpeg", "-y", "-i", wav_path, "-c:a", "libopus", "-b:a", "16k", output_path
+        ], capture_output=True)
+
+        if ffmpeg_result.returncode != 0:
+            print(f"FFmpeg error: {ffmpeg_result.stderr}")
+            return None
+
+        os.remove(wav_path)
         return output_path
     except Exception as e:
         print(f"TTS error: {e}")
         return None
 
-# === STT: Yandex SpeechKit (исправлено) ===
-async def transcribe_with_yandex(ogg_path: str) -> str:
+# === STT: Deepgram API (обязательно для голосового ввода) ===
+async def transcribe_with_deepgram(ogg_path: str) -> str:
     try:
         with open(ogg_path, "rb") as f:
             audio_data = f.read()
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize",  # ← пробелы удалены
-                headers={"Authorization": f"Api-Key {YANDEX_API_KEY}"},
-                params={"folderId": YANDEX_FOLDER_ID, "lang": "es-ES"},
+                "https://api.deepgram.com/v1/listen?model=nova-2&language=es&smart_format=true",
+                headers={
+                    "Authorization": f"Token {DEEPGRAM_API_KEY}",
+                    "Content-Type": "audio/ogg"
+                },
                 content=audio_data
             )
         if response.status_code == 200:
-            return response.json().get("result", "").strip()
+            data = response.json()
+            return data["results"]["channels"][0]["alternatives"][0]["transcript"].strip()
         else:
-            print(f"Yandex STT error: {response.text}")
+            print(f"Deepgram STT error: {response.text}")
             return ""
     except Exception as e:
         print(f"STT exception: {e}")
@@ -118,7 +126,7 @@ async def get_llm_response(user_id: int, user_text: str) -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             response = await client.post(
-                "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",  # ← пробелы удалены
+                "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
                 headers={
                     "Authorization": f"Api-Key {YANDEX_API_KEY}",
                     "Content-Type": "application/json"
@@ -140,21 +148,19 @@ async def get_llm_response(user_id: int, user_text: str) -> str:
             answer = data["result"]["alternatives"][0]["message"]["text"].strip()
             await save_message(user_id, "user", user_text)
             await save_message(user_id, "assistant", answer)
-            last_responses[user_id] = answer  # Сохраняем для кнопки "Texto"
+            last_responses[user_id] = answer
             return answer
         except Exception as e:
             print(f"YandexGPT exception: {e}")
             return "Lo siento, algo salió mal."
 
-# === Отправка голоса + кнопки "Texto" ===
+# === Отправка голоса + кнопка "Texto" ===
 async def send_response_with_voice(message: Message, response_text: str):
     voice_path = f"/tmp/resp_{message.message_id}.ogg"
     voice_file = await text_to_speech_ogg(response_text, voice_path)
     if voice_file and os.path.exists(voice_file):
-        # Отправляем голос
         await message.reply_voice(open(voice_file, "rb"))
         os.remove(voice_file)
-        # Отправляем кнопку "Texto"
         keyboard = InlineKeyboardMarkup().add(
             InlineKeyboardButton("Texto", callback_data=f"text_{message.from_user.id}")
         )
@@ -162,7 +168,7 @@ async def send_response_with_voice(message: Message, response_text: str):
     else:
         await message.reply(response_text)
 
-# === Команда /start ===
+# === /start ===
 @dp.message_handler(commands=["start"])
 async def cmd_start(message: Message):
     user_name = message.from_user.first_name or "amigo"
@@ -171,23 +177,26 @@ async def cmd_start(message: Message):
     await message.answer("🎙️ ¿Listo para practicar? ¡Háblame en español!")
     await message.answer_sticker("CAACAgIAAxkBAAEUY9tpME6m_cOsHmDgPUSbPhr7nmbTHQACDooAAm0biEnNOhsS-bVUkTYE")
 
-# === Обработчики сообщений ===
+# === Обработчик голосовых сообщений (обязательный!) ===
 @dp.message_handler(content_types=ContentType.VOICE)
 async def handle_voice(message: Message):
     try:
         voice = await message.voice.get_file()
         file_path = f"/tmp/voice_{message.from_user.id}.ogg"
         await bot.download_file(voice.file_path, file_path)
-        user_text = await transcribe_with_yandex(file_path)
+
+        user_text = await transcribe_with_deepgram(file_path)
         if not user_text:
             await message.reply("No entendí tu mensaje. ¿Puedes repetirlo?")
             return
+
         response_text = await get_llm_response(message.from_user.id, user_text)
         await send_response_with_voice(message, response_text)
     except Exception as e:
         print(f"Voice handler error: {e}")
         await message.reply("Hubo un error al procesar tu voz.")
 
+# === Обработчик текстовых сообщений ===
 @dp.message_handler(content_types=ContentType.TEXT)
 async def handle_text(message: Message):
     try:
@@ -197,11 +206,11 @@ async def handle_text(message: Message):
         print(f"Text handler error: {e}")
         await message.reply("Lo siento, algo salió mal.")
 
-# === Обработчик кнопки "Texto" ===
+# === Кнопка "Texto" ===
 @dp.callback_query_handler(lambda c: c.data.startswith('text_'))
 async def process_text_callback(callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
-    await callback_query.answer()  # Убираем уведомление "ждите..."
+    await callback_query.answer()
     if user_id in last_responses:
         text = last_responses[user_id]
         await callback_query.message.reply(f"📄 **Texto:**\n\n{text}", parse_mode="Markdown")
@@ -211,7 +220,7 @@ async def process_text_callback(callback_query: CallbackQuery):
 # === Webhooks ===
 @app.on_event("startup")
 async def on_startup():
-    webhook_url = "https://botesp-1.onrender.com/webhook"  # ← пробелы удалены
+    webhook_url = "https://botesp-1.onrender.com/webhook"
     await bot.set_webhook(webhook_url)
     print(f"✅ Webhook set: {webhook_url}")
 
