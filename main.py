@@ -77,28 +77,42 @@ async def get_llm_response(user_id: int, user_text: str) -> str:
     messages.append({"role": "user", "content": user_text})
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "HTTP-Referer": "https://botesp-1.onrender.com",
-                "X-Title": "Spanish Tutor Bot"
-            },
-            json={
-                "model": "mistralai/mistral-7b-instruct:free",
-                "messages": messages,
-                "temperature": 0.7
-            }
-        )
-    try:
-        answer = response.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"LLM error: {e}")
-        answer = "Lo siento, tuve un problema técnico. ¿Podrías repetirlo?"
+        try:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "HTTP-Referer": "https://botesp-1.onrender.com",
+                    "X-Title": "Spanish Tutor Bot"
+                },
+                json={
+                    "model": "mistralai/mistral-7b-instruct:free",
+                    "messages": messages,
+                    "temperature": 0.7
+                }
+            )
 
-    await save_message(user_id, "user", user_text)
-    await save_message(user_id, "assistant", answer)
-    return answer
+            # Проверяем статус
+            if response.status_code != 200:
+                error_text = response.text
+                print(f"❌ OpenRouter HTTP {response.status_code}: {error_text}")
+                return "Lo siento, no tengo créditos disponibles en este momento. Inténtalo más tarde."
+
+            data = response.json()
+
+            # Проверяем, есть ли 'choices'
+            if "choices" not in data or not data["choices"]:
+                print(f"❌ OpenRouter unexpected response: {data}")
+                return "Lo siento, el modelo de IA no está disponible ahora."
+
+            answer = data["choices"][0]["message"]["content"].strip()
+            await save_message(user_id, "user", user_text)
+            await save_message(user_id, "assistant", answer)
+            return answer
+
+        except Exception as e:
+            print(f"❌ OpenRouter exception: {e}")
+            return "Lo siento, tuve un problema técnico con el modelo de IA."
 
 # === Telegram handlers ===
 
