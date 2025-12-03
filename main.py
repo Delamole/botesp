@@ -38,13 +38,14 @@ async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
         # Используем espeak-ng с улучшенными параметрами для испанского
         subprocess.run([
             "espeak-ng",
-            "-v", "es-la",          # Латиноамериканский испанский
-            "-s", "120",            # Скорость: 120 слов/мин
+            "-v", "es",          # Латиноамериканский испанский
+            "-s", "110",            # Скорость: 120 слов/мин
             "--pho",                # Улучшает плавность через фонемы
             "-p", "55",             # Тон: чуть выше среднего
             "-a", "200",            # Громкость
             "-w", temp_wav,
-            text
+            text = text.replace(".", ". "),
+	      text = text.replace("?", "? ")
         ], check=True, capture_output=True)
 
         # Конвертация в .ogg (требование Telegram Voice)
