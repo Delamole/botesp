@@ -43,7 +43,6 @@ async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
                     "voice": "madirus",       # Голос с лёгким акцентом, но поддерживает es
                     "folderId": YANDEX_FOLDER_ID,
                     "format": "oggopus",      # Готовый формат для Telegram!
-                    "sampleRateHertz": 24000
                 }
             )
         if response.status_code != 200:
