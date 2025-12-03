@@ -1,4 +1,5 @@
 # main.py
+iimport subprocess
 import os
 from aiogram import Bot, Dispatcher
 from aiogram.types import ContentType, Update
@@ -137,8 +138,19 @@ async def handle_voice(message):
 @dp.message_handler(content_types=ContentType.TEXT)
 async def handle_text(message):
     try:
-        response = await get_llm_response(message.from_user.id, message.text)
-        await message.reply(response)
+        response_text = await get_llm_response(message.from_user.id, message.text)
+        
+        # Генерируем голос
+        voice_path = f"/tmp/response_{message.message_id}.ogg"
+        voice_file = await text_to_speech_ogg(response_text, voice_path, lang="es")
+        
+        if voice_file and os.path.exists(voice_file):
+            with open(voice_file, "rb") as f:
+                await message.reply_voice(f)
+            os.remove(voice_file)
+        else:
+            # Если TTS не сработал — отправляем текст как fallback
+            await message.reply(response_text)
     except Exception as e:
         print(f"Text handler error: {e}")
         await message.reply("Lo siento, algo salió mal.")
@@ -181,3 +193,25 @@ async def health_check():
     await save_message(user_id, "user", user_text)
     await save_message(user_id, "assistant", answer)
     return answer
+
+
+async def text_to_speech_ogg(text: str, output_path: str, lang="es"):
+    """Генерирует .ogg аудиофайл из текста с помощью espeak + ffmpeg"""
+    try:
+        # Генерируем временный .wav через espeak
+        temp_wav = output_path.replace(".ogg", ".wav")
+        subprocess.run([
+            "espeak", "-v", f"{lang}+f2", "-s", "140", "-w", temp_wav, text
+        ], check=True, capture_output=True)
+
+        # Конвертируем в .ogg (формат Telegram voice)
+        subprocess.run([
+            "ffmpeg", "-y", "-i", temp_wav, "-acodec", "libopus", output_path
+        ], check=True, capture_output=True)
+
+        # Удаляем временный файл
+        os.remove(temp_wav)
+        return output_path
+    except Exception as e:
+        print(f"TTS error: {e}")
+        return None
