@@ -38,7 +38,7 @@ async def text_to_speech_ogg(text: str, output_path: str, lang="es") -> str | No
         # Настройки для обучения испанскому
         voice = "es-la+m1"   # Латиноамериканский женский голос
         speed = "100"        # Медленная, чёткая речь
-        pitch = «60"         # Нейтральный тон
+        pitch = "60"         # Нейтральный тон
         amplitude = "200"    # Полная громкость
 
         subprocess.run([
