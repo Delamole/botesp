@@ -166,17 +166,13 @@ async def get_llm_response(user_id: int, user_text: str) -> str:
 
 # === Отправка ответа с голосом ===
 async def send_response_with_voice(message, response_text: str):
-    try:
-        voice_path = f"/tmp/resp_{message.message_id}.ogg"
-        voice_file = await text_to_speech_ogg(response_text)
-        if voice_file and os.path.exists(voice_file):
-            with open(voice_file, "rb") as f:
-                await message.reply_voice(f)
-            os.remove(voice_file)
-        else:
-            await message.reply(response_text)
-    except Exception as e:
-        print(f"Send voice error: {e}")
+    voice_path = f"/tmp/resp_{message.message_id}.ogg"
+    voice_file = await text_to_speech_ogg(response_text, voice_path)  # ← 2 аргумента
+    if voice_file and os.path.exists(voice_file):
+        with open(voice_file, "rb") as f:
+            await message.reply_voice(f)
+        os.remove(voice_file)
+    else:
         await message.reply(response_text)
 
 # === Обработчики ===
