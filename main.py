@@ -74,7 +74,7 @@ async def transcribe_with_deepgram(ogg_path: str) -> str:
             audio_data = f.read()
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                "https://api.deepgram.com/v1/listen?model=nova-2&language==es&smart_format=true",
+                "https://api.deepgram.com/v1/listen?model=general&language=es",
                 headers={
                     "Authorization": f"Token {DEEPGRAM_API_KEY}",
                     "Content-Type": "audio/ogg"
