@@ -1,6 +1,5 @@
 # main.py
 import os
-import subprocess
 from aiogram import Bot, Dispatcher
 from aiogram.types import ContentType, Update
 from supabase import create_client, Client
@@ -9,11 +8,10 @@ from fastapi import FastAPI, Request, Response
 
 # Переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")      # ← API-ключ Yandex Cloud
+YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")  # ← ID каталога Yandex Cloud
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")  # ← ДОБАВЬТЕ ЭТО В RENDER
 
 # Инициализация
 bot = Bot(token=BOT_TOKEN)
@@ -32,76 +30,60 @@ SYSTEM_PROMPT = (
     "Adapta tu lenguaje al nivel principiante."
 )
 
-# === TTS через ElevenLabs ===
+# === TTS: текст → голос (Yandex SpeechKit) ===
 async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
-    """
-    Генерирует .ogg через ElevenLabs (нейросетевой TTS)
-    """
     try:
-        if not ELEVENLABS_API_KEY:
-            print("⚠️ ELEVENLABS_API_KEY not set — skipping TTS")
-            return None
-
-        # Голос Rachel — поддерживает испанский в мультиязычной модели
-        voice_id = "21m00Tcm4TlvDq8ikWAM"  # Rachel
-        model_id = "eleven_multilingual_v2"
-
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
-                headers={
-                    "xi-api-key": ELEVENLABS_API_KEY,
-                    "Content-Type": "application/json"
-                },
-                json={
+                "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize",
+                headers={"Authorization": f"Api-Key {YANDEX_API_KEY}"},
+                data={
                     "text": text,
-                    "model_id": model_id,
-                    "voice_settings": {
-                        "stability": 0.7,
-                        "similarity_boost": 0.8
-                    }
+                    "lang": "es-ES",          # Испанский (Европа)
+                    "voice": "madirus",       # Голос с лёгким акцентом, но поддерживает es
+                    "folderId": YANDEX_FOLDER_ID,
+                    "format": "oggopus",      # Готовый формат для Telegram!
+                    "sampleRateHertz": 24000
                 }
             )
+        if response.status_code != 200:
+            print(f"Yandex TTS error: {response.text}")
+            return None
 
-            if response.status_code != 200:
-                print(f"❌ ElevenLabs error {response.status_code}: {response.text}")
-                return None
-
-        # Сохраняем .mp3
-        mp3_path = output_path.replace(".ogg", ".mp3")
-        with open(mp3_path, "wb") as f:
+        with open(output_path, "wb") as f:
             f.write(response.content)
-
-        # Конвертируем в .ogg (требование Telegram Voice)
-        subprocess.run([
-            "ffmpeg", "-y", "-i", mp3_path, "-acodec", "libopus", output_path
-        ], check=True, capture_output=True)
-
-        os.remove(mp3_path)
         return output_path
 
     except Exception as e:
-        print(f"TTS (ElevenLabs) error: {e}")
+        print(f"TTS error: {e}")
         return None
 
-# === Распознавание речи → Deepgram ===
-async def transcribe_with_deepgram(ogg_path: str) -> str:
-    async with httpx.AsyncClient() as client:
+# === STT: голос → текст (Yandex SpeechKit) ===
+async def transcribe_with_yandex(ogg_path: str) -> str:
+    try:
         with open(ogg_path, "rb") as f:
-            resp = await client.post(
-                "https://api.deepgram.com/v1/listen?model=nova-2&language=es&smart_format=true",
-                headers={
-                    "Authorization": f"Token {DEEPGRAM_API_KEY}",
-                    "Content-Type": "audio/ogg"
-                },
-                content=f.read()
-            )
-    if resp.status_code == 200:
-        data = resp.json()
-        return data["results"]["channels"][0]["alternatives"][0]["transcript"].strip()
-    return ""
+            audio_data = f.read()
 
-# === История и ИИ ===
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize",
+                headers={"Authorization": f"Api-Key {YANDEX_API_KEY}"},
+                params={
+                    "folderId": YANDEX_FOLDER_ID,
+                    "lang": "es-ES"  # Распознавание на испанском
+                },
+                content=audio_data
+            )
+        if response.status_code == 200:
+            return response.json().get("result", "").strip()
+        else:
+            print(f"Yandex STT error: {response.text}")
+            return ""
+    except Exception as e:
+        print(f"STT exception: {e}")
+        return ""
+
+# === Работа с историей ===
 async def get_chat_history(user_id: int):
     try:
         response = supabase.table("messages").select("*") \
@@ -124,50 +106,52 @@ async def save_message(user_id: int, role: str, content: str):
     except Exception as e:
         print(f"Save error: {e}")
 
+# === Ответ от YandexGPT ===
 async def get_llm_response(user_id: int, user_text: str) -> str:
     history = await get_chat_history(user_id)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": user_text})
+    messages = [{"role": "system", "text": SYSTEM_PROMPT}]
+    for msg in history:
+        role = "user" if msg["role"] == "user" else "assistant"
+        messages.append({"role": role, "text": msg["content"]})
+    messages.append({"role": "user", "text": user_text})
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
+                "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
                 headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "HTTP-Referer": "https://botesp-1.onrender.com",
-                    "X-Title": "Spanish Tutor Bot"
+                    "Authorization": f"Api-Key {YANDEX_API_KEY}",
+                    "Content-Type": "application/json"
                 },
                 json={
-                    "model": "mistralai/mistral-7b-instruct:free",
-                    "messages": messages,
-                    "temperature": 0.7
+                    "modelUri": f"gpt://b1gvlr8qjiq4kq7eqd3v/yandexgpt/latest",
+                    "completionOptions": {
+                        "stream": False,
+                        "temperature": 0.6,
+                        "maxTokens": "2000"
+                    },
+                    "messages": messages
                 }
             )
 
             if response.status_code != 200:
-                print(f"❌ OpenRouter HTTP {response.status_code}: {response.text}")
-                return "Lo siento, no tengo créditos disponibles."
+                print(f"YandexGPT error: {response.text}")
+                return "Lo siento, tuve un problema técnico."
 
             data = response.json()
-            if "choices" not in data or not data["choices"]:
-                print(f"❌ OpenRouter invalid response: {data}")
-                return "Lo siento, el modelo no responde."
-
-            answer = data["choices"][0]["message"]["content"].strip()
+            answer = data["result"]["alternatives"][0]["message"]["text"].strip()
             await save_message(user_id, "user", user_text)
             await save_message(user_id, "assistant", answer)
             return answer
 
         except Exception as e:
-            print(f"❌ OpenRouter exception: {e}")
-            return "Lo siento, tuve un problema técnico."
+            print(f"YandexGPT exception: {e}")
+            return "Lo siento, algo salió mal."
 
-# === Отправка ответа с голосом ===
+# === Отправка ответа ===
 async def send_response_with_voice(message, response_text: str):
     voice_path = f"/tmp/resp_{message.message_id}.ogg"
-    voice_file = await text_to_speech_ogg(response_text, voice_path)  # ← 2 аргумента
+    voice_file = await text_to_speech_ogg(response_text, voice_path)
     if voice_file and os.path.exists(voice_file):
         with open(voice_file, "rb") as f:
             await message.reply_voice(f)
@@ -183,7 +167,7 @@ async def handle_voice(message):
         file_path = f"/tmp/voice_{message.from_user.id}.ogg"
         await bot.download_file(voice.file_path, file_path)
 
-        user_text = await transcribe_with_deepgram(file_path)
+        user_text = await transcribe_with_yandex(file_path)
         if not user_text:
             await message.reply("No entendí tu mensaje. ¿Puedes repetirlo?")
             return
