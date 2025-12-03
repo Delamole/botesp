@@ -17,7 +17,7 @@ last_responses = {}
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")  # ← Обязательно для STT
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
@@ -67,14 +67,14 @@ async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
         print(f"TTS error: {e}")
         return None
 
-# === STT: Deepgram API (обязательно для голосового ввода) ===
+# === STT: Deepgram API ===
 async def transcribe_with_deepgram(ogg_path: str) -> str:
     try:
         with open(ogg_path, "rb") as f:
             audio_data = f.read()
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                "https://api.deepgram.com/v1/listen?model=nova-2&language=es&smart_format=true",
+                "https://api.deepgram.com/v1/listen?model=nova-2&language==es&smart_format=true",
                 headers={
                     "Authorization": f"Token {DEEPGRAM_API_KEY}",
                     "Content-Type": "audio/ogg"
@@ -177,7 +177,7 @@ async def cmd_start(message: Message):
     await message.answer("🎙️ ¿Listo para practicar? ¡Háblame en español!")
     await message.answer_sticker("CAACAgIAAxkBAAEUY9tpME6m_cOsHmDgPUSbPhr7nmbTHQACDooAAm0biEnNOhsS-bVUkTYE")
 
-# === Обработчик голосовых сообщений (обязательный!) ===
+# === Обработчик голосовых сообщений ===
 @dp.message_handler(content_types=ContentType.VOICE)
 async def handle_voice(message: Message):
     try:
@@ -206,14 +206,15 @@ async def handle_text(message: Message):
         print(f"Text handler error: {e}")
         await message.reply("Lo siento, algo salió mal.")
 
-# === Кнопка "Texto" ===
+# === Кнопка "Texto" с эмодзи ===
 @dp.callback_query_handler(lambda c: c.data.startswith('text_'))
 async def process_text_callback(callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
     await callback_query.answer()
     if user_id in last_responses:
         text = last_responses[user_id]
-        await callback_query.message.reply(f"📄 **Texto:**\n\n{text}", parse_mode="Markdown")
+        formatted_text = f"🎙️ **Texto:**\n\n{text}\n\n😊 ¡Sigue practicando!"
+        await callback_query.message.reply(formatted_text, parse_mode="Markdown")
     else:
         await callback_query.message.reply("Lo siento, no tengo el texto guardado.")
 
