@@ -43,7 +43,7 @@ async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
             return None
 
         # Голос Rachel — поддерживает испанский в мультиязычной модели
-        voice_id = "pNInz6obpgDQGcFXXJ0n"  # Rachel
+        voice_id = "21m00Tcm4TlvDq8ikWAM"  # Rachel
         model_id = "eleven_multilingual_v2"
 
         async with httpx.AsyncClient(timeout=30.0) as client:
