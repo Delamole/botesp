@@ -1,12 +1,13 @@
+# Dockerfile
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Установка espeak и ffmpeg
+# Устанавливаем только необходимое: ffmpeg + espeak-ng
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    espeak \
     ffmpeg \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

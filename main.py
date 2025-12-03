@@ -31,35 +31,32 @@ SYSTEM_PROMPT = (
     "Adapta tu lenguaje al nivel principiante."
 )
 
-async def text_to_speech_ogg(text: str, output_path: str, lang="es") -> str | None:
+async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
     try:
         temp_wav = output_path.replace(".ogg", ".wav")
         
-        # Настройки для обучения испанскому
-        voice = "es-la+f3"   # Латиноамериканский женский голос
-        speed = "115"        # Медленная, чёткая речь
-        pitch = "60"         # Нейтральный тон
-        amplitude = "200"    # Полная громкость
-
+        # Используем espeak-ng с улучшенными параметрами для испанского
         subprocess.run([
-            "espeak", 
-            "-v", voice,
-            "-s", speed,
-            "-p", pitch,
-            "-a", amplitude,
+            "espeak-ng",
+            "-v", "es-la",          # Латиноамериканский испанский
+            "-s", "120",            # Скорость: 120 слов/мин
+            "--pho",                # Улучшает плавность через фонемы
+            "-p", "55",             # Тон: чуть выше среднего
+            "-a", "200",            # Громкость
             "-w", temp_wav,
             text
         ], check=True, capture_output=True)
 
-        # Конвертация в .ogg (Telegram Voice)
+        # Конвертация в .ogg (требование Telegram Voice)
         subprocess.run([
             "ffmpeg", "-y", "-i", temp_wav, "-acodec", "libopus", output_path
         ], check=True, capture_output=True)
 
         os.remove(temp_wav)
         return output_path
+
     except Exception as e:
-        print(f"TTS error: {e}")
+        print(f"TTS (espeak-ng) error: {e}")
         return None
 
 # === Распознавание речи (голос → текст) ===
