@@ -33,6 +33,10 @@ SYSTEM_PROMPT = (
 
 async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
     try:
+    	  text = text.replace(".", ". ")
+        text = text.replace("?", "? ")
+        text = text.replace("!", "! ")
+        text = text.strip()
         temp_wav = output_path.replace(".ogg", ".wav")
         
         # Используем espeak-ng с улучшенными параметрами для испанского
@@ -44,8 +48,7 @@ async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
             "-p", "55",             # Тон: чуть выше среднего
             "-a", "200",            # Громкость
             "-w", temp_wav,
-            text = text.replace(".", ". "),
-	      text = text.replace("?", "? ")
+            text
         ], check=True, capture_output=True)
 
         # Конвертация в .ogg (требование Telegram Voice)
