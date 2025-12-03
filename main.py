@@ -31,18 +31,31 @@ SYSTEM_PROMPT = (
     "Adapta tu lenguaje al nivel principiante."
 )
 
-# === TTS: текст в голосовое сообщение ===
 async def text_to_speech_ogg(text: str, output_path: str, lang="es") -> str | None:
     try:
         temp_wav = output_path.replace(".ogg", ".wav")
-        # Генерация речи через espeak
+        
+        # Настройки для обучения испанскому
+        voice = "es-la+m1"   # Латиноамериканский женский голос
+        speed = "100"        # Медленная, чёткая речь
+        pitch = «60"         # Нейтральный тон
+        amplitude = "200"    # Полная громкость
+
         subprocess.run([
-            "espeak", "-v", f"{lang}+f2", "-s", "140", "-w", temp_wav, text
+            "espeak", 
+            "-v", voice,
+            "-s", speed,
+            "-p", pitch,
+            "-a", amplitude,
+            "-w", temp_wav,
+            text
         ], check=True, capture_output=True)
-        # Конвертация в .ogg (формат Telegram Voice)
+
+        # Конвертация в .ogg (Telegram Voice)
         subprocess.run([
             "ffmpeg", "-y", "-i", temp_wav, "-acodec", "libopus", output_path
         ], check=True, capture_output=True)
+
         os.remove(temp_wav)
         return output_path
     except Exception as e:
