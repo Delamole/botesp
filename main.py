@@ -33,16 +33,15 @@ SYSTEM_PROMPT = (
 # === TTS: текст → голос (Yandex SpeechKit) ===
 async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
     try:
-        # Формируем SSML-строку БЕЗ изменения Content-Type
-        ssml_text = f'<speak><lang xml:lang="es-ES">{text}</lang></speak>'
+        # Формируем SSML-разметку
+        ssml_content = f'<speak><lang xml:lang="es-ES">{text}</lang></speak>'
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize",
                 headers={"Authorization": f"Api-Key {YANDEX_API_KEY}"},
                 data={
-                    "text": ssml_text,
-                    "ssml": "true",             # ← КЛЮЧЕВОЙ ПАРАМЕТР
+                    "ssml": ssml_content,       # ← ИСПОЛЬЗУЕМ ssml, НЕ text
                     "folderId": YANDEX_FOLDER_ID,
                     "voice": "madirus",
                     "format": "oggopus"
