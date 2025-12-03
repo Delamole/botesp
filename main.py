@@ -123,7 +123,7 @@ async def get_llm_response(user_id: int, user_text: str) -> str:
                     "Content-Type": "application/json"
                 },
                 json={
-                    "modelUri": f"gpt://b1gvlr8qjiq4kq7eqd3v/yandexgpt/latest",
+                    "modelUri": f"gpt://b1gtelqnpt0qebniscns/yandexgpt/latest",
                     "completionOptions": {
                         "stream": False,
                         "temperature": 0.6,
