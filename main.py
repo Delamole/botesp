@@ -10,14 +10,11 @@ from supabase import create_client, Client
 import httpx
 from fastapi import FastAPI, Request, Response
 
-# === Глобальное хранилище последних ответов ===
-last_responses = {}
-
 # === Переменные окружения ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
@@ -38,58 +35,54 @@ SYSTEM_PROMPT = (
     "Adapta tu lenguaje al nivel principiante."
 )
 
-# === TTS: espeak-ng (локально) ===
+# === Глобальное хранилище последних ответов ===
+last_responses = {}
+
+# === TTS через ElevenLabs ===
 async def text_to_speech_ogg(text: str, output_path: str) -> str | None:
-    try:
-        text = text.replace("&", "y").replace("<", "").replace(">", "")
-        wav_path = output_path.replace(".ogg", ".wav")
-
-        result = subprocess.run([
-            "espeak-ng", "-v", "es-la", "-s", "110", "--pho", "-p", "55", "-a", "200",
-            "-w", wav_path, text
-        ], capture_output=True, text=True)
-
-        if result.returncode != 0:
-            print(f"espeak-ng error: {result.stderr}")
-            return None
-
-        ffmpeg_result = subprocess.run([
-            "ffmpeg", "-y", "-i", wav_path, "-c:a", "libopus", "-b:a", "16k", output_path
-        ], capture_output=True)
-
-        if ffmpeg_result.returncode != 0:
-            print(f"FFmpeg error: {ffmpeg_result.stderr}")
-            return None
-
-        os.remove(wav_path)
-        return output_path
-    except Exception as e:
-        print(f"TTS error: {e}")
+    """Генерирует .ogg через ElevenLabs + ffmpeg"""
+    if not ELEVENLABS_API_KEY:
+        print("⚠️ ELEVENLABS_API_KEY not set — skipping TTS")
         return None
 
-# === STT: Deepgram API ===
-async def transcribe_with_deepgram(ogg_path: str) -> str:
     try:
-        with open(ogg_path, "rb") as f:
-            audio_data = f.read()
+        # 👇 ЛУЧШИЕ ГОЛОСА ДЛЯ ИСПАНСКОГО (см. раздел ниже)
+        voice_id = "21m00Tcm4TlvDq8ikWAM"  # Rachel — универсальный, поддерживает испанский
+        model_id = "eleven_multilingual_v2"  # Обязательно! Поддерживает испанский
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                "https://api.deepgram.com/v1/listen?model=general&language=es",
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
                 headers={
-                    "Authorization": f"Token {DEEPGRAM_API_KEY}",
-                    "Content-Type": "audio/ogg"
+                    "xi-api-key": ELEVENLABS_API_KEY,
+                    "Content-Type": "application/json"
                 },
-                content=audio_data
+                json={
+                    "text": text,
+                    "model_id": model_id,
+                    "voice_settings": {
+                        "stability": 0.7,
+                        "similarity_boost": 0.8
+                    }
+                }
             )
-        if response.status_code == 200:
-            data = response.json()
-            return data["results"]["channels"][0]["alternatives"][0]["transcript"].strip()
-        else:
-            print(f"Deepgram STT error: {response.text}")
-            return ""
+
+        if response.status_code != 200:
+            print(f"❌ ElevenLabs error {response.status_code}: {response.text}")
+            return None
+
+        # Сохраняем .mp3 → конвертируем в .ogg
+        mp3_path = output_path.replace(".ogg", ".mp3")
+        with open(mp3_path, "wb") as f:
+            f.write(response.content)
+
+        subprocess.run(["ffmpeg", "-y", "-i", mp3_path, "-acodec", "libopus", output_path], check=True)
+        os.remove(mp3_path)
+        return output_path
+
     except Exception as e:
-        print(f"STT exception: {e}")
-        return ""
+        print(f"TTS (ElevenLabs) error: {e}")
+        return None
 
 # === Работа с историей ===
 async def get_chat_history(user_id: int):
@@ -161,8 +154,9 @@ async def send_response_with_voice(message: Message, response_text: str):
     if voice_file and os.path.exists(voice_file):
         await message.reply_voice(open(voice_file, "rb"))
         os.remove(voice_file)
+        # 👇 Кнопка с эмодзи
         keyboard = InlineKeyboardMarkup().add(
-            InlineKeyboardButton("Texto", callback_data=f"text_{message.from_user.id}")
+            InlineKeyboardButton("📝 Texto", callback_data=f"text_{message.from_user.id}")
         )
         await message.reply("¿Quieres ver la transcripción?", reply_markup=keyboard)
     else:
@@ -177,26 +171,11 @@ async def cmd_start(message: Message):
     await message.answer("🎙️ ¿Listo para practicar? ¡Háblame en español!")
     await message.answer_sticker("CAACAgIAAxkBAAEUY9tpME6m_cOsHmDgPUSbPhr7nmbTHQACDooAAm0biEnNOhsS-bVUkTYE")
 
-# === Обработчик голосовых сообщений ===
+# === Обработчики сообщений ===
 @dp.message_handler(content_types=ContentType.VOICE)
 async def handle_voice(message: Message):
-    try:
-        voice = await message.voice.get_file()
-        file_path = f"/tmp/voice_{message.from_user.id}.ogg"
-        await bot.download_file(voice.file_path, file_path)
+    await message.reply("🎙️ Por ahora solo acepto mensajes de texto. ¡Escríbeme en español!")
 
-        user_text = await transcribe_with_deepgram(file_path)
-        if not user_text:
-            await message.reply("No entendí tu mensaje. ¿Puedes repetirlo?")
-            return
-
-        response_text = await get_llm_response(message.from_user.id, user_text)
-        await send_response_with_voice(message, response_text)
-    except Exception as e:
-        print(f"Voice handler error: {e}")
-        await message.reply("Hubo un error al procesar tu voz.")
-
-# === Обработчик текстовых сообщений ===
 @dp.message_handler(content_types=ContentType.TEXT)
 async def handle_text(message: Message):
     try:
@@ -213,8 +192,8 @@ async def process_text_callback(callback_query: CallbackQuery):
     await callback_query.answer()
     if user_id in last_responses:
         text = last_responses[user_id]
-        formatted_text = f"🎙️ **Texto:**\n\n{text}\n\n😊 ¡Sigue practicando!"
-        await callback_query.message.reply(formatted_text, parse_mode="Markdown")
+        formatted = f"🎙️ **Texto:**\n\n{text}\n\n😊 ¡Sigue practicando!"
+        await callback_query.message.reply(formatted, parse_mode="Markdown")
     else:
         await callback_query.message.reply("Lo siento, no tengo el texto guardado.")
 
@@ -223,7 +202,6 @@ async def process_text_callback(callback_query: CallbackQuery):
 async def on_startup():
     webhook_url = "https://botesp-1.onrender.com/webhook"
     await bot.set_webhook(webhook_url)
-    print(f"✅ Webhook set: {webhook_url}")
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):

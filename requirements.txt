@@ -1,7 +1,5 @@
 aiogram==2.25.1
-python-dotenv
 httpx
-psycopg2-binary
 supabase
 fastapi
 uvicorn
